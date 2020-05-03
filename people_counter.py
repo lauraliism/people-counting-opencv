@@ -20,6 +20,8 @@ import imutils
 import time
 import dlib
 import cv2
+import os
+
 
 # construct the argument parse and parse the arguments
 ap = argparse.ArgumentParser()
@@ -37,16 +39,18 @@ ap.add_argument("-s", "--skip-frames", type=int, default=30,
 	help="# of skip frames between detections")
 args = vars(ap.parse_args())
 
-# initialize the list of class labels MobileNet SSD was trained to
+# initialize the list of class labels YOLO was trained to
 # detect
-CLASSES = ["background", "aeroplane", "bicycle", "bird", "boat",
-	"bottle", "bus", "car", "cat", "chair", "cow", "diningtable",
-	"dog", "horse", "motorbike", "person", "pottedplant", "sheep",
-	"sofa", "train", "tvmonitor"]
+labelsPath = os.path.sep.join(['./yolo-coco', "coco.names"])
+CLASSES = open(labelsPath).read().strip().split("\n")
 
-# load our serialized model from disk
-print("[INFO] loading model...")
-net = cv2.dnn.readNetFromCaffe(args["prototxt"], args["model"])
+# derive the paths to the YOLO weights and model configuration
+weightsPath = os.path.sep.join(['./yolo-coco', "yolov3.weights"])
+configPath = os.path.sep.join(['./yolo-coco', "yolov3.cfg"])
+
+# load our YOLO object detector trained on COCO dataset (80 classes)
+print("[INFO] loading YOLO from disk...")
+net = cv2.dnn.readNetFromDarknet(configPath, weightsPath)
 
 # if a video path was not supplied, grab a reference to the webcam
 if not args.get("input", False):
@@ -98,7 +102,7 @@ while True:
 	# resize the frame to have a maximum width of 500 pixels (the
 	# less data we have, the faster we can process it), then convert
 	# the frame from BGR to RGB for dlib
-	frame = imutils.resize(frame, width=500)
+	frame = imutils.resize(frame, width=416)
 	rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
 	# if the frame dimensions are empty, set them
@@ -125,44 +129,81 @@ while True:
 		status = "Detecting"
 		trackers = []
 
+		# determine only the *output* layer names that we need from YOLO
+		ln = net.getLayerNames()
+		ln = [ln[i[0] - 1] for i in net.getUnconnectedOutLayers()]
+
 		# convert the frame to a blob and pass the blob through the
 		# network and obtain the detections
-		blob = cv2.dnn.blobFromImage(frame, 0.007843, (W, H), 127.5)
+		blob = cv2.dnn.blobFromImage(frame, 1 / 255.0, (416, 416), swapRB=True, crop=False)
+		# blob = cv2.dnn.blobFromImage(frame, 0.007843, (W, H), 127.5)
+		
+		# --- Forward Pass of YOLO ---
 		net.setInput(blob)
-		detections = net.forward()
+		detections = net.forward(ln)
 
-		# loop over the detections
-		for i in np.arange(0, detections.shape[2]):
-			# extract the confidence (i.e., probability) associated
-			# with the prediction
-			confidence = detections[0, 0, i, 2]
+		boxes = []
+		confidences = []
+		classIDs = []
 
-			# filter out weak detections by requiring a minimum
-			# confidence
-			if confidence > args["confidence"]:
-				# extract the index of the class label from the
-				# detections list
-				idx = int(detections[0, 0, i, 1])
+		# loop over each of the layer outputs
+		for output in detections:
+			# loop over each of the detections
+			for detection in output:
 
-				# if the class label is not a person, ignore it
-				if CLASSES[idx] != "person":
-					continue
+				# extract the class ID and confidence (i.e., probability) of
+				# the current object detection
+				scores = detection[5:]
+				classID = np.argmax(scores)
+				confidence = scores[classID]
 
-				# compute the (x, y)-coordinates of the bounding box
-				# for the object
-				box = detections[0, 0, i, 3:7] * np.array([W, H, W, H])
-				(startX, startY, endX, endY) = box.astype("int")
+				# filter out weak detections by requiring a minimum
+				# confidence
+				if confidence > args["confidence"]:
+					# extract the index of the class label from the
+					# detections list
+
+					# if the class label is not a person, ignore it
+					if CLASSES[classID] != "person":
+						continue
+
+					# compute the (x, y)-coordinates of the bounding box
+					# for the object
+					box = detection[0:4] * np.array([W, H, W, H])
+					(startX, startY, endX, endY) = box.astype("int")
+
+					# use the center (x, y)-coordinates to derive the top and
+					# and left corner of the bounding box
+					x = int(startX - (endX / 2))
+					y = int(startY - (endY / 2))
+
+					boxes.append([x, y, int(endX), int(endY)])
+					confidences.append(float(confidence))
+					classIDs.append(classID)
+
+		# apply non-maxima suppression to suppress weak, overlapping bounding
+		# boxes (as YOLO does not apply it by default)
+		idxs = cv2.dnn.NMSBoxes(boxes, confidences, args["confidence"], 0.3)
+
+		if len(idxs) > 0:
+			for i in idxs.flatten():
+				# extract the bounding box coordinates
+				(x, y) = (boxes[i][0], boxes[i][1])
+				(w, h) = (boxes[i][2], boxes[i][3])
+
+				#cv2.rectangle(image, (x, y), (x + w, y + h), color, 2)
 
 				# construct a dlib rectangle object from the bounding
 				# box coordinates and then start the dlib correlation
 				# tracker
 				tracker = dlib.correlation_tracker()
-				rect = dlib.rectangle(startX, startY, endX, endY)
+				rect = dlib.rectangle(x, y, x+int(endX), y+int(endY))
 				tracker.start_track(rgb, rect)
 
 				# add the tracker to our list of trackers so we can
 				# utilize it during skip frames
 				trackers.append(tracker)
+
 
 	# otherwise, we should utilize our object *trackers* rather than
 	# object *detectors* to obtain a higher frame processing throughput
@@ -204,6 +245,7 @@ while True:
 		# if there is no existing trackable object, create one
 		if to is None:
 			to = TrackableObject(objectID, centroid)
+			print('--- Create new trackable object ---', objectID)
 
 		# otherwise, there is a trackable object so we can utilize it
 		# to determine direction

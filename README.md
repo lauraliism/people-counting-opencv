@@ -3,6 +3,10 @@ It ia a camera based people counter.
 This repo has been created based on [this blog post](https://www.pyimagesearch.com/2018/08/13/opencv-people-counter/). The difference is that instead of using the Single Shot Detector(SSD) for object detection this repository uses You Only Look Once ([YOLO](https://www.pyimagesearch.com/2018/11/12/yolo-object-detection-with-opencv/)) deep learning algorithm.
 
 It takes a video file (`.mp4`) and draws a counting line on it. Then it trys to first detect people in the frame, assigns an ID to them and starts tracking the objects.
+
+# The output  
+![](demo_output_01.gif)
+
  
 # How to run it?
 

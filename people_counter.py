@@ -99,7 +99,7 @@ while True:
 	if args["input"] is not None and frame is None:
 		break
 
-	# resize the frame to have a maximum width of 500 pixels (the
+	# resize the frame to have a maximum width of 416 pixels (the
 	# less data we have, the faster we can process it), then convert
 	# the frame from BGR to RGB for dlib
 	frame = imutils.resize(frame, width=416)
@@ -170,19 +170,22 @@ while True:
 					# compute the (x, y)-coordinates of the bounding box
 					# for the object
 					box = detection[0:4] * np.array([W, H, W, H])
-					(startX, startY, endX, endY) = box.astype("int")
+					(centerX, centerY, width, height) = box.astype("int")
 
 					# use the center (x, y)-coordinates to derive the top and
 					# and left corner of the bounding box
-					x = int(startX - (endX / 2))
-					y = int(startY - (endY / 2))
+					x = int(centerX - (width / 2))
+					y = int(centerY - (height / 2))
 
-					boxes.append([x, y, int(endX), int(endY)])
+					boxes.append([x, y, int(width), int(height)])
 					confidences.append(float(confidence))
 					classIDs.append(classID)
 
 		# apply non-maxima suppression to suppress weak, overlapping bounding
 		# boxes (as YOLO does not apply it by default)
+		# 0.3 = threshold (If the overlap  ratio is greater than the threshold, 
+		# then we know that the two bounding boxes sufficiently overlap and we 
+		# can thus suppress the current bounding box.)
 		idxs = cv2.dnn.NMSBoxes(boxes, confidences, args["confidence"], 0.3)
 
 		if len(idxs) > 0:
@@ -191,13 +194,11 @@ while True:
 				(x, y) = (boxes[i][0], boxes[i][1])
 				(w, h) = (boxes[i][2], boxes[i][3])
 
-				#cv2.rectangle(image, (x, y), (x + w, y + h), color, 2)
-
 				# construct a dlib rectangle object from the bounding
 				# box coordinates and then start the dlib correlation
 				# tracker
 				tracker = dlib.correlation_tracker()
-				rect = dlib.rectangle(x, y, x+int(endX), y+int(endY))
+				rect = dlib.rectangle(x, y, x+w, y+h)
 				tracker.start_track(rgb, rect)
 
 				# add the tracker to our list of trackers so we can
